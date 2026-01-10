@@ -108,10 +108,13 @@ interface EmailStats {
 }
 
 interface EmailLog {
-  sender_email: string;
-  receiver_email: string;
-  provider: 'gmail' | 'ses';
-  status: 'sent' | 'failed';
+  _id: string;
+  job_id: string;
+  senderMail: string;
+  receiverMail: string;
+  status: 'scheduled' | 'sent' | 'failed';
+  scheduled_at: string;
+  executed_at: string | null;
   error: string | null;
   created_at: string;
 }
@@ -387,7 +390,7 @@ const AdminDashboard = ({ token, onLogout }: { token: string, onLogout: () => vo
         suppressLog: true
       });
       if (limitData && !limitData.error) {
-         limits = { ...limits, ...limitData };
+          limits = { ...limits, ...limitData };
       }
     } catch (e) {
       // ignore, use defaults
@@ -767,34 +770,119 @@ const UserDashboard = ({ token, onLogout }: { token: string, onLogout: () => voi
   );
 };
 
-// 8. User Stats & Logs (Re-added per updated request)
+// 8. User Stats & Logs (Updated to include DELETE APIs)
 const UserStats = ({ token }: { token: string }) => {
   const [stats, setStats] = useState<EmailStats | null>(null);
   const [logs, setLogs] = useState<EmailLog[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  
+  // States for selection and deletion
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [confirmModal, setConfirmModal] = useState<{ show: boolean, type: 'single' | 'bulk' | 'all', id?: string } | null>(null);
+
+  const fetchLogs = async (silent = false) => {
+    if (!silent) setRefreshing(true);
+    try {
+      const data = await apiCall('/emails/logs', { 
+        headers: { 'Authorization': `Bearer ${token}` } 
+      });
+      setLogs(data.logs || []);
+    } catch (err) {
+      console.error("Failed to load logs", err);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const fetchStats = async () => {
+    try {
+      const statsData = await apiCall('/user/email-stats', { headers: { 'Authorization': `Bearer ${token}` } });
+      setStats(statsData);
+    } catch (err) {
+      console.error("Failed to load stats", err);
+    }
+  };
 
   useEffect(() => {
-    const fetchData = async () => {
+    const initData = async () => {
       setLoading(true);
-      try {
-        const statsData = await apiCall('/user/email-stats', { headers: { 'Authorization': `Bearer ${token}` } });
-        setStats(statsData);
-        
-        const logsData = await apiCall('/user/email-logs?limit=20', { headers: { 'Authorization': `Bearer ${token}` } });
-        setLogs(logsData);
-      } catch (err) {
-        console.error("Failed to load stats", err);
-      } finally {
-        setLoading(false);
-      }
+      await Promise.all([fetchStats(), fetchLogs(true)]);
+      setLoading(false);
     };
-    fetchData();
+    initData();
   }, [token]);
+
+  // --- DELETE HANDLERS ---
+
+  const handleDeleteSingle = async (id: string) => {
+    setIsDeleting(true);
+    try {
+      await apiCall(`/emails/logs/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      await fetchLogs(true);
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setIsDeleting(false);
+      setConfirmModal(null);
+    }
+  };
+
+  const handleDeleteBulk = async () => {
+    if (selectedIds.length === 0) return;
+    setIsDeleting(true);
+    try {
+      await apiCall('/emails/logs/bulk-delete', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ ids: selectedIds })
+      });
+      setSelectedIds([]);
+      await fetchLogs(true);
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setIsDeleting(false);
+      setConfirmModal(null);
+    }
+  };
+
+  const handleDeleteAll = async () => {
+    setIsDeleting(true);
+    try {
+      await apiCall('/emails/logs/delete-all', {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      await fetchLogs(true);
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setIsDeleting(false);
+      setConfirmModal(null);
+    }
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.length === logs.length) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(logs.map(l => l._id));
+    }
+  };
 
   if (loading) return <div className="p-10 text-center"><Loader2 className="w-8 h-8 animate-spin mx-auto text-blue-500" /></div>;
 
   return (
-    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 relative">
       <div className="flex items-center justify-between">
         <div><h2 className="text-2xl font-bold text-white">Overview</h2><p className="text-slate-400">Your email usage statistics and recent activity.</p></div>
       </div>
@@ -838,30 +926,104 @@ const UserStats = ({ token }: { token: string }) => {
         </div>
       )}
 
+      {/* EMAIL LOGS SECTION WITH DELETE ACTIONS */}
       <div className="bg-slate-900/50 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
-        <div className="p-4 border-b border-slate-800 flex items-center gap-2">
-           <History className="w-4 h-4 text-slate-400" />
-           <h3 className="font-semibold text-white">Recent Email Logs</h3>
+        <div className="p-4 border-b border-slate-800 flex flex-wrap items-center justify-between gap-4">
+           <div className="flex items-center gap-2">
+             <History className="w-4 h-4 text-slate-400" />
+             <h3 className="font-semibold text-white">Recent Email Logs</h3>
+           </div>
+           
+           <div className="flex items-center gap-2">
+             {selectedIds.length > 0 && (
+               <button 
+                onClick={() => setConfirmModal({ show: true, type: 'bulk' })}
+                className="flex items-center gap-2 px-3 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-lg text-xs font-medium transition-all"
+               >
+                 <Trash2 className="w-3 h-3" />
+                 Delete Selected ({selectedIds.length})
+               </button>
+             )}
+             
+             {logs.length > 0 && (
+               <button 
+                 onClick={() => setConfirmModal({ show: true, type: 'all' })}
+                 className="flex items-center gap-2 px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium transition-all"
+               >
+                 Delete All History
+               </button>
+             )}
+
+             <button 
+               onClick={() => { fetchLogs(); fetchStats(); }}
+               disabled={refreshing}
+               className="flex items-center gap-2 px-3 py-1 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/20 rounded-lg text-xs font-medium transition-colors"
+             >
+               <RefreshCw className={`w-3 h-3 ${refreshing ? 'animate-spin' : ''}`} />
+               Refresh
+             </button>
+           </div>
         </div>
+        
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm text-slate-400">
-             <thead className="bg-slate-900 text-slate-200 uppercase font-medium text-xs">
-               <tr><th className="px-6 py-3">Time</th><th className="px-6 py-3">Sender</th><th className="px-6 py-3">Receiver</th><th className="px-6 py-3">Provider</th><th className="px-6 py-3">Status</th></tr>
+             <thead className="bg-slate-900 text-slate-200 uppercase font-medium text-[10px] tracking-wider">
+               <tr>
+                 <th className="px-6 py-4 w-10">
+                   <input 
+                     type="checkbox" 
+                     className="accent-blue-500 rounded" 
+                     checked={logs.length > 0 && selectedIds.length === logs.length}
+                     onChange={toggleSelectAll}
+                   />
+                 </th>
+                 <th className="px-6 py-4">Receiver Email</th>
+                 <th className="px-6 py-4">Status</th>
+                 <th className="px-6 py-4 text-center">Scheduled / Executed</th>
+                 <th className="px-6 py-4 text-right">Action</th>
+               </tr>
              </thead>
              <tbody className="divide-y divide-slate-800">
                {logs.length === 0 ? (
-                 <tr><td colSpan={5} className="px-6 py-8 text-center text-slate-500">No logs found.</td></tr>
-               ) : logs.map((log, i) => (
-                 <tr key={i} className="hover:bg-slate-800/30">
-                   <td className="px-6 py-3 whitespace-nowrap">{new Date(log.created_at).toLocaleString()}</td>
-                   <td className="px-6 py-3">{log.sender_email}</td>
-                   <td className="px-6 py-3">{log.receiver_email}</td>
-                   <td className="px-6 py-3 uppercase text-xs font-bold">{log.provider}</td>
-                   <td className="px-6 py-3">
-                      <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${log.status === 'sent' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
-                        {log.status}
-                      </span>
-                      {log.error && <div className="text-xs text-red-400 mt-1 max-w-[200px] truncate" title={log.error}>{log.error}</div>}
+                 <tr><td colSpan={5} className="px-6 py-12 text-center text-slate-500 italic">No email logs available.</td></tr>
+               ) : logs.map((log) => (
+                 <tr key={log._id} className={`hover:bg-slate-800/30 transition-colors group ${selectedIds.includes(log._id) ? 'bg-blue-500/5' : ''}`}>
+                   <td className="px-6 py-4">
+                     <input 
+                       type="checkbox" 
+                       className="accent-blue-500 rounded"
+                       checked={selectedIds.includes(log._id)}
+                       onChange={() => toggleSelect(log._id)}
+                     />
+                   </td>
+                   <td className="px-6 py-4 font-medium text-slate-300 group-hover:text-white transition-colors">{log.receiverMail}</td>
+                   <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex flex-col">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase w-fit ${
+                          log.status === 'sent' ? 'bg-green-500/20 text-green-400' : 
+                          log.status === 'failed' ? 'bg-red-500/20 text-red-400' :
+                          'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                        }`}>
+                          {log.status}
+                        </span>
+                        {log.status === 'failed' && log.error && (
+                          <span className="text-[10px] text-red-400 mt-1 max-w-[180px] truncate" title={log.error}>
+                            {log.error}
+                          </span>
+                        )}
+                      </div>
+                   </td>
+                   <td className="px-6 py-4 whitespace-nowrap text-[11px] text-slate-500 font-mono text-center">
+                     <div>{new Date(log.scheduled_at).toLocaleString()}</div>
+                     <div className="text-slate-600 mt-0.5">{log.executed_at ? new Date(log.executed_at).toLocaleString() : 'Not Executed'}</div>
+                   </td>
+                   <td className="px-6 py-4 text-right">
+                      <button 
+                        onClick={() => setConfirmModal({ show: true, type: 'single', id: log._id })}
+                        className="p-2 text-slate-600 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                    </td>
                  </tr>
                ))}
@@ -869,6 +1031,45 @@ const UserStats = ({ token }: { token: string }) => {
           </table>
         </div>
       </div>
+
+      {/* CUSTOM CONFIRMATION MODAL */}
+      {confirmModal?.show && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="flex justify-center mb-4">
+              <div className="p-3 bg-red-500/20 rounded-full">
+                <Trash2 className="w-6 h-6 text-red-500" />
+              </div>
+            </div>
+            <h3 className="text-lg font-bold text-white text-center mb-2">Are you sure?</h3>
+            <p className="text-slate-400 text-sm text-center mb-6">
+              {confirmModal.type === 'single' && "This email log will be permanently deleted."}
+              {confirmModal.type === 'bulk' && `You are about to delete ${selectedIds.length} selected logs.`}
+              {confirmModal.type === 'all' && "This will wipe your entire email history. This action cannot be undone."}
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <button 
+                onClick={() => setConfirmModal(null)}
+                disabled={isDeleting}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-medium transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button 
+                disabled={isDeleting}
+                onClick={() => {
+                  if (confirmModal.type === 'single' && confirmModal.id) handleDeleteSingle(confirmModal.id);
+                  else if (confirmModal.type === 'bulk') handleDeleteBulk();
+                  else if (confirmModal.type === 'all') handleDeleteAll();
+                }}
+                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl font-bold transition-colors shadow-lg shadow-red-900/20 flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -1189,45 +1390,28 @@ const ScheduleEmails = ({ token }: { token: string }) => {
     try {
       if (!currentTemplate.subject || !currentTemplate.body) throw new Error("Template required.");
 
-      const formattedSenders = senders.map(s => {
-        if (!s.email) throw new Error("Sender email required");
-        
-        const emailParts = s.email.split('@');
-        const domain = emailParts.length > 1 ? emailParts[1].toLowerCase() : '';
-        const isPublic = ['gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'icloud.com', 'aol.com', 'live.com', 'msn.com'].includes(domain);
+      const formattedSenders = senders.map(s => ({
+        senderMail: s.email,
+        smtp_password: s.password || "" 
+      }));
 
-        const senderObj: any = { senderMail: s.email };
-        
-        // Per API spec: Gmail/Public require password. Custom domains strictly forbidden.
-        if (isPublic) {
-          if (!s.password) throw new Error(`App Password is required for public domain: ${domain}`);
-          senderObj.smtp_password = s.password;
-        } 
-        // Custom domains do NOT send smtp_password key
-        
-        return senderObj;
-      });
-
-      // Wrap body in proper HTML to ensure bolding works. 
-      // Also convert newlines to <br> to preserve spacing in HTML mode.
-      const htmlBody = `<html><body>${currentTemplate.body.replace(/\n/g, '<br/>')}</body></html>`;
-
-      let payload: any = {
+      const payload: any = {
         senders: formattedSenders,
         template: { 
           subject: currentTemplate.subject, 
-          body: htmlBody 
+          body: `<html><body>${currentTemplate.body.replace(/\n/g, '<br/>')}</body></html>` 
         }
       };
 
       if (mode === 'manual') {
-        payload.receivers = receivers.filter(r => r.receiverMail && r.scheduledDateTime).map(r => ({
-          receiverMail: r.receiverMail,
-          receiverDomain: r.receiverDomain || "",
-          receiverName: r.receiverName || "",
-          // Format Date strictly as YYYY-MM-DD HH:MM
-          scheduledDateTime: r.scheduledDateTime.replace('T', ' ').substring(0, 16)
-        }));
+        payload.receivers = receivers
+          .filter(r => r.receiverMail && r.scheduledDateTime)
+          .map(r => ({
+            receiverMail: r.receiverMail,
+            receiverDomain: r.receiverDomain || "",
+            receiverName: r.receiverName || "",
+            scheduledDateTime: r.scheduledDateTime.replace('T', ' ').substring(0, 16)
+          }));
         if (payload.receivers.length === 0) throw new Error("Please add at least one valid receiver with a date.");
       } else {
         if (!csvFile) throw new Error("Please upload a CSV file.");
@@ -1240,14 +1424,13 @@ const ScheduleEmails = ({ token }: { token: string }) => {
         body: JSON.stringify(payload)
       });
       
-      setResponseMsg({ type: 'success', text: `Success! ${data.scheduled_count || 0} emails scheduled.` });
+      setResponseMsg({ 
+        type: 'success', 
+        text: `${data.message || 'Success!'} ${data.scheduled_count !== undefined ? `(${data.scheduled_count} scheduled)` : ''}` 
+      });
 
     } catch (err: any) {
-      if (err.message.includes("Access Expired")) {
-         setResponseMsg({ type: 'error', text: "Access Expired. Please contact admin." });
-      } else {
-        setResponseMsg({ type: 'error', text: err.message });
-      }
+      setResponseMsg({ type: 'error', text: err.message });
     } finally {
       setLoading(false);
     }
