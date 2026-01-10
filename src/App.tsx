@@ -362,10 +362,7 @@ const AdminDashboard = ({ token, onLogout }: { token: string, onLogout: () => vo
   const [formData, setFormData] = useState({
     status: 'approved',
     access_days: 30,
-    allowed_apis: ['scheduleEmails', 'extractEmails'],
-    gmail_daily_limit: 100,
-    ses_daily_limit: 1000,
-    monthly_limit: 20000
+    allowed_apis: ['scheduleEmails', 'extractEmails', 'domainVerification']
   });
 
   const fetchUsers = async () => {
@@ -378,29 +375,12 @@ const AdminDashboard = ({ token, onLogout }: { token: string, onLogout: () => vo
 
   useEffect(() => { fetchUsers(); }, []);
 
-  const handleEditClick = async (user: User) => {
+  const handleEditClick = (user: User) => {
     setEditingUser(user);
-    // Initialize with basics
-    let limits = { gmail_daily_limit: 100, ses_daily_limit: 1000, monthly_limit: 20000 };
-    
-    // Fetch limits for this user
-    try {
-      const limitData = await apiCall(`/admin/get-email-limits?email=${user.email}`, { 
-        headers: { 'Authorization': `Bearer ${token}` },
-        suppressLog: true
-      });
-      if (limitData && !limitData.error) {
-          limits = { ...limits, ...limitData };
-      }
-    } catch (e) {
-      // ignore, use defaults
-    }
-
     setFormData({
       status: user.status === 'pending' ? 'approved' : user.status,
       access_days: user.access_days || 30,
-      allowed_apis: user.allowed_apis.length > 0 ? user.allowed_apis : ['scheduleEmails', 'extractEmails'],
-      ...limits
+      allowed_apis: user.allowed_apis.length > 0 ? user.allowed_apis : ['scheduleEmails', 'extractEmails','domainVerification']
     });
     setMsg(null);
   };
@@ -409,7 +389,7 @@ const AdminDashboard = ({ token, onLogout }: { token: string, onLogout: () => vo
     if (!editingUser) return;
     setMsg(null);
     try {
-      // 1. Update Permissions
+      // API call to update user access and status
       await apiCall('/admin/update-permissions', {
         method: 'POST',
         headers: {
@@ -421,18 +401,6 @@ const AdminDashboard = ({ token, onLogout }: { token: string, onLogout: () => vo
           status: formData.status,
           allowed_apis: formData.allowed_apis,
           access_days: Number(formData.access_days)
-        })
-      });
-
-      // 2. Update Limits
-      await apiCall('/admin/set-email-limits', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({
-          email: editingUser.email,
-          gmail_daily_limit: Number(formData.gmail_daily_limit),
-          ses_daily_limit: Number(formData.ses_daily_limit),
-          monthly_limit: Number(formData.monthly_limit)
         })
       });
 
@@ -593,7 +561,6 @@ const AdminDashboard = ({ token, onLogout }: { token: string, onLogout: () => vo
                       <div className="text-xs text-slate-500">Allows scraping domains</div>
                     </div>
                   </label>
-                  {/* NEW: Domain Verification Permission */}
                   <label className="flex items-center gap-3 p-3 bg-slate-800/50 rounded-lg cursor-pointer hover:bg-slate-800">
                     <input 
                       type="checkbox"
@@ -607,37 +574,6 @@ const AdminDashboard = ({ token, onLogout }: { token: string, onLogout: () => vo
                     </div>
                   </label>
                 </div>
-              </div>
-
-               <div className="grid grid-cols-2 gap-4">
-                 <div>
-                   <label className="block text-sm text-slate-400 mb-2">Gmail Daily Limit</label>
-                   <input 
-                     type="number" 
-                     value={formData.gmail_daily_limit} 
-                     onChange={(e) => setFormData({...formData, gmail_daily_limit: parseInt(e.target.value)})} 
-                     className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-blue-500 outline-none" 
-                   />
-                 </div>
-                 <div>
-                   <label className="block text-sm text-slate-400 mb-2">SES Daily Limit</label>
-                   <input 
-                     type="number" 
-                     value={formData.ses_daily_limit} 
-                     onChange={(e) => setFormData({...formData, ses_daily_limit: parseInt(e.target.value)})} 
-                     className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-blue-500 outline-none" 
-                   />
-                 </div>
-              </div>
-              
-              <div>
-                <label className="block text-sm text-slate-400 mb-2">Monthly Limit</label>
-                <input 
-                  type="number" 
-                  value={formData.monthly_limit} 
-                  onChange={(e) => setFormData({...formData, monthly_limit: parseInt(e.target.value)})} 
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-blue-500 outline-none" 
-                />
               </div>
 
               {msg && (
@@ -770,7 +706,7 @@ const UserDashboard = ({ token, onLogout }: { token: string, onLogout: () => voi
   );
 };
 
-// 8. User Stats & Logs (Updated to include DELETE APIs)
+// 4. User Stats & Logs (Updated to include DELETE APIs)
 const UserStats = ({ token }: { token: string }) => {
   const [stats, setStats] = useState<EmailStats | null>(null);
   const [logs, setLogs] = useState<EmailLog[]>([]);
@@ -1074,7 +1010,7 @@ const UserStats = ({ token }: { token: string }) => {
   );
 };
 
-// 7. Domain Manager Module
+// 5. Domain Manager Module
 const DomainManager = ({ token }: { token: string }) => {
   const [domains, setDomains] = useState<DomainListItem[]>([]);
   const [newEmail, setNewEmail] = useState('');
@@ -1577,7 +1513,7 @@ const ScheduleEmails = ({ token }: { token: string }) => {
   );
 };
 
-// 5. Extract Emails Module
+// 7. Extract Emails Module
 const ExtractEmails = ({ token }: { token: string }) => {
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [domainCol, setDomainCol] = useState('domain');
@@ -1670,7 +1606,7 @@ const ExtractEmails = ({ token }: { token: string }) => {
   );
 };
 
-// 9. Master Scheduler Component (NEW)
+// 8. Master Scheduler Component
 const MasterScheduler = ({ token }: { token: string }) => {
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -1894,7 +1830,7 @@ const MasterScheduler = ({ token }: { token: string }) => {
   );
 };
 
-// 6. Main App Entry
+// 9. Main App Entry
 const App = () => {
   const [token, setToken] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
