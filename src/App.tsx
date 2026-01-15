@@ -39,7 +39,8 @@ import {
   History,
   Activity,
   TrendingUp,
-  Layers
+  Layers,
+  Clock
 } from 'lucide-react';
 
 // --- Types ---
@@ -144,6 +145,19 @@ interface MasterScheduleSummary {
   errors: Array<{
     row: number;
     senderMail: string;
+    error: string;
+  }>;
+}
+
+interface AutoScheduleSummary {
+  message: string;
+  startDateTime: string;
+  gapMinutes: number;
+  scheduled: number;
+  failed: number;
+  errors: Array<{
+    row?: number;
+    email?: string;
     error: string;
   }>;
 }
@@ -373,7 +387,7 @@ const AdminDashboard = ({ token, onLogout }: { token: string, onLogout: () => vo
     status: 'approved',
     access_days: 30,
     monthly_email_limit: 500,
-    allowed_apis: ['scheduleEmails', 'extractEmails', 'domainVerification']
+    allowed_apis: ['scheduleEmails', 'extractEmails', 'domainVerification', 'autoScheduleEmails']
   });
 
   const fetchUsers = async () => {
@@ -403,7 +417,7 @@ const AdminDashboard = ({ token, onLogout }: { token: string, onLogout: () => vo
       status: user.status === 'pending' ? 'approved' : user.status,
       access_days: user.access_days || 30,
       monthly_email_limit: user.monthly_email_limit || userUsage?.monthly_email_limit || 500,
-      allowed_apis: user.allowed_apis.length > 0 ? user.allowed_apis : ['scheduleEmails', 'extractEmails','domainVerification']
+      allowed_apis: user.allowed_apis.length > 0 ? user.allowed_apis : ['scheduleEmails', 'extractEmails','domainVerification', 'autoScheduleEmails']
     });
     setMsg(null);
   };
@@ -525,7 +539,7 @@ const AdminDashboard = ({ token, onLogout }: { token: string, onLogout: () => vo
 
       {editingUser && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-lg shadow-2xl">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-lg shadow-2xl overflow-y-auto max-h-[90vh]">
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-xl font-bold text-white">Update Permissions</h3>
               <button onClick={() => setEditingUser(null)}><X className="w-5 h-5 text-slate-400 hover:text-white" /></button>
@@ -600,6 +614,18 @@ const AdminDashboard = ({ token, onLogout }: { token: string, onLogout: () => vo
                   <label className="flex items-center gap-3 p-3 bg-slate-800/50 rounded-lg cursor-pointer hover:bg-slate-800">
                     <input 
                       type="checkbox"
+                      checked={formData.allowed_apis.includes('autoScheduleEmails')}
+                      onChange={() => toggleApi('autoScheduleEmails')}
+                      className="w-4 h-4 accent-indigo-500"
+                    />
+                    <div>
+                      <div className="text-white font-medium">Auto Schedule Emails</div>
+                      <div className="text-xs text-slate-500">Allows drip campaigns with time gaps</div>
+                    </div>
+                  </label>
+                  <label className="flex items-center gap-3 p-3 bg-slate-800/50 rounded-lg cursor-pointer hover:bg-slate-800">
+                    <input 
+                      type="checkbox"
                       checked={formData.allowed_apis.includes('extractEmails')}
                       onChange={() => toggleApi('extractEmails')}
                       className="w-4 h-4 accent-purple-500"
@@ -646,7 +672,7 @@ const AdminDashboard = ({ token, onLogout }: { token: string, onLogout: () => vo
 
 // 3. User Dashboard Layout
 const UserDashboard = ({ token, onLogout }: { token: string, onLogout: () => void }) => {
-  const [activeTab, setActiveTab] = useState<'overview' | 'schedule' | 'master' | 'domains' | 'extract'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'schedule' | 'auto' | 'master' | 'domains' | 'extract'>('overview');
   const [health, setHealth] = useState<{status: string, scheduler_running: boolean} | null>(null);
   
   useEffect(() => {
@@ -698,6 +724,16 @@ const UserDashboard = ({ token, onLogout }: { token: string, onLogout: () => voi
                 <LayoutDashboard className="w-5 h-5" />
                 <span className="font-medium">Schedule Emails</span>
               </button>
+              
+              <button
+                onClick={() => setActiveTab('auto')}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-all border ${
+                  activeTab === 'auto' ? 'bg-blue-600 border-blue-500 text-white shadow-lg' : 'bg-slate-900/50 border-transparent text-slate-400 hover:bg-slate-800'
+                }`}
+              >
+                <Clock className="w-5 h-5" />
+                <span className="font-medium">Auto Scheduler</span>
+              </button>
 
               <button
                 onClick={() => setActiveTab('master')}
@@ -743,6 +779,7 @@ const UserDashboard = ({ token, onLogout }: { token: string, onLogout: () => voi
           <div className="flex-1 min-w-0">
               {activeTab === 'overview' ? <UserStats token={token} /> :
                activeTab === 'schedule' ? <ScheduleEmails token={token} /> : 
+               activeTab === 'auto' ? <AutoScheduler token={token} /> :
                activeTab === 'master' ? <MasterScheduler token={token} /> :
                activeTab === 'domains' ? <DomainManager token={token} /> : 
                <ExtractEmails token={token} />
@@ -1476,7 +1513,7 @@ const ScheduleEmails = ({ token }: { token: string }) => {
           {mode === 'manual' ? (
             <div className="space-y-3">
                 {receivers.map((rec, idx) => (
-                <div key={idx} className="flex flex-col xl:flex-row gap-3 bg-slate-800/40 p-4 rounded-xl border border-slate-700/50 hover:border-slate-600 transition-all items-start xl:items-center">
+                <div key={idx} className="flex flex-col xl:flex-row gap-3 bg-slate-800/40 p-4 rounded-xl border border-slate-700/50 space-y-3 xl:space-y-0 hover:border-slate-600 transition-all items-start xl:items-center">
                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 flex-1 w-full">
                     <div className="relative"><span className="absolute -top-2 left-2 text-[10px] bg-slate-800 px-1 text-slate-500 font-semibold uppercase">Name</span><input placeholder="Name" className="w-full bg-slate-900/80 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 outline-none" value={rec.receiverName} onChange={e => { const list = [...receivers]; list[idx].receiverName = e.target.value; setReceivers(list); }} /></div>
                     <div className="relative"><span className="absolute -top-2 left-2 text-[10px] bg-slate-800 px-1 text-slate-500 font-semibold uppercase">Domain</span><input placeholder="Domain" className="w-full bg-slate-900/80 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 outline-none" value={rec.receiverDomain} onChange={e => { const list = [...receivers]; list[idx].receiverDomain = e.target.value; setReceivers(list); }} /></div>
@@ -1562,7 +1599,301 @@ const ScheduleEmails = ({ token }: { token: string }) => {
   );
 };
 
-// 7. Extract Emails Module
+// 7. Auto Scheduler Module
+const AutoScheduler = ({ token }: { token: string }) => {
+  const [mode, setMode] = useState<'manual' | 'receiver_csv' | 'full_csv'>('manual');
+  const [startDateTime, setStartDateTime] = useState('');
+  const [gapMinutes, setGapMinutes] = useState(5);
+  const [sender, setSender] = useState({ email: '', password: '' });
+  const [savedSenders, setSavedSenders] = useState<Sender[]>([]);
+  const [receivers, setReceivers] = useState<Array<{receiverMail: string, receiverDomain: string, receiverName: string}>>([{ receiverMail: '', receiverDomain: '', receiverName: '' }]);
+  const [csvFile, setCsvFile] = useState<File | null>(null);
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
+  const [template, setTemplate] = useState({ subject: '', body: '', name: '' });
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<AutoScheduleSummary | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
+  const [isPreview, setIsPreview] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const saved = localStorage.getItem('emailTemplates');
+    if (saved) setTemplates(JSON.parse(saved));
+    const savedProfiles = localStorage.getItem('savedSenders');
+    if (savedProfiles) setSavedSenders(JSON.parse(savedProfiles));
+  }, []);
+
+  const saveTemplate = () => {
+    if (!template.name) return alert('Please name your template');
+    const newTemplate: Template = { id: Date.now().toString(), name: template.name, subject: template.subject, body: template.body };
+    const updated = [...templates, newTemplate];
+    setTemplates(updated);
+    localStorage.setItem('emailTemplates', JSON.stringify(updated));
+    setSelectedTemplateId(newTemplate.id);
+    setIsTemplateModalOpen(false);
+  };
+
+  const deleteTemplate = (id: string) => {
+    const updated = templates.filter(t => t.id !== id);
+    setTemplates(updated);
+    localStorage.setItem('emailTemplates', JSON.stringify(updated));
+    if (selectedTemplateId === id) {
+      setSelectedTemplateId('');
+      setTemplate({ name: '', subject: '', body: '' });
+    }
+  };
+
+  const loadTemplate = (id: string) => {
+    setSelectedTemplateId(id);
+    const found = templates.find(t => t.id === id);
+    if (found) setTemplate({ name: found.name, subject: found.subject, body: found.body });
+  };
+
+  const saveSenderProfile = (sender: {email: string, password?: string}) => {
+    if (!sender.email) return alert("Enter email");
+    const existingIndex = savedSenders.findIndex(s => s.email === sender.email);
+    let updatedList = existingIndex >= 0 ? [...savedSenders] : [...savedSenders, sender];
+    if (existingIndex >= 0) updatedList[existingIndex] = sender;
+    setSavedSenders(updatedList);
+    localStorage.setItem('savedSenders', JSON.stringify(updatedList));
+  };
+
+  const insertTag = (tagStart: string, tagEnd: string = "") => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const text = textarea.value;
+    const before = text.substring(0, start);
+    const selection = text.substring(start, end);
+    const after = text.substring(end);
+    const newText = before + tagStart + selection + tagEnd + after;
+    setTemplate({ ...template, body: newText });
+    setTimeout(() => {
+        textarea.focus();
+        textarea.setSelectionRange(start + tagStart.length, end + tagStart.length);
+    }, 0);
+  };
+
+  const handleSubmit = async () => {
+    if (!startDateTime) return setError("Start Date & Time is required");
+    if (gapMinutes < 1 || gapMinutes > 60) return setError("Gap Minutes must be between 1 and 60");
+    setLoading(true); setError(null); setResult(null);
+
+    try {
+      const payload: any = {
+        startDateTime: startDateTime.replace('T', ' ').substring(0, 16),
+        gapMinutes: Number(gapMinutes),
+        template: {
+          subject: template.subject,
+          body: `<html><body>${template.body.replace(/\n/g, '<br/>')}</body></html>`
+        }
+      };
+
+      if (mode === 'manual') {
+        payload.sender = { senderMail: sender.email, smtp_password: sender.password };
+        payload.receivers = receivers.filter(r => r.receiverMail);
+      } else if (mode === 'receiver_csv') {
+        if (!csvFile) throw new Error("Please upload receivers CSV");
+        payload.sender = { senderMail: sender.email, smtp_password: sender.password };
+        payload.receivers_csv_base64 = await fileToBase64(csvFile);
+      } else {
+        if (!csvFile) throw new Error("Please upload full CSV");
+        payload.csv_base64 = await fileToBase64(csvFile);
+      }
+
+      const data = await apiCall('/scheduleEmails/auto', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify(payload)
+      });
+      setResult(data);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div><h2 className="text-2xl font-bold text-white">Auto Scheduler</h2><p className="text-slate-400 mt-1">Configure drip campaigns with fixed time intervals.</p></div>
+        <button onClick={handleSubmit} disabled={loading} className="w-full sm:w-auto bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white px-6 py-2.5 rounded-xl font-semibold flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20 active:scale-95 transition-all">
+          {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Play className="w-5 h-5 fill-current" />} Start Auto Schedule
+        </button>
+      </div>
+
+      {error && <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl flex items-center gap-3 text-red-400"><AlertCircle className="w-5 h-5 shrink-0" /><p className="text-sm font-medium">{error}</p></div>}
+
+      {result && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden animate-in slide-in-from-bottom-4 shadow-2xl">
+          <div className="p-6 border-b border-slate-800 bg-slate-900/50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <div>
+               <h3 className="text-lg font-bold text-white flex items-center gap-2"><CheckCircle className="w-5 h-5 text-green-400" /> Auto Scheduling Result</h3>
+               <p className="text-slate-500 text-sm mt-1">Start: {new Date(result.startDateTime).toLocaleString()} • Gap: {result.gapMinutes} mins</p>
+            </div>
+            <div className="flex gap-4">
+              <div className="text-center"><div className="text-xl font-bold text-green-400">{result.scheduled}</div><div className="text-[10px] text-slate-500 uppercase">Scheduled</div></div>
+              <div className="text-center"><div className="text-xl font-bold text-red-400">{result.failed}</div><div className="text-[10px] text-slate-500 uppercase">Failed</div></div>
+            </div>
+          </div>
+          {result.errors.length > 0 && (
+            <div className="p-4 bg-red-950/20 divide-y divide-red-900/30">
+              {result.errors.map((err, i) => (
+                <div key={i} className="text-xs text-red-300 py-2">
+                  {err.row && <span className="font-bold mr-2">Row {err.row}:</span>}
+                  {err.email && <span className="italic mr-2">{err.email} -</span>}
+                  {err.error}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="space-y-6">
+        {/* Timing Config Card */}
+        <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6 shadow-sm">
+           <h3 className="font-semibold text-white mb-6 flex items-center gap-2"><div className="p-1.5 bg-blue-500/20 rounded text-blue-400"><Clock className="w-4 h-4" /></div> Interval Settings</h3>
+           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+              <div className="space-y-2">
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Start Date & Time (IST)</label>
+                <div className="relative">
+                  <Calendar className="absolute left-3 top-3 w-4 h-4 text-slate-500" />
+                  <input type="datetime-local" className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-10 pr-4 py-2.5 text-white outline-none focus:border-blue-500 transition-all" value={startDateTime} onChange={e => setStartDateTime(e.target.value)} />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Gap Minutes (1-60)</label>
+                <div className="relative">
+                  <Clock className="absolute left-3 top-3 w-4 h-4 text-slate-500" />
+                  <input type="number" min="1" max="60" className={`w-full bg-slate-900 border ${gapMinutes > 60 || gapMinutes < 1 ? 'border-red-500' : 'border-slate-700'} rounded-xl pl-10 pr-4 py-2.5 text-white outline-none focus:border-blue-500 transition-all`} value={gapMinutes} onChange={e => setGapMinutes(parseInt(e.target.value))} />
+                </div>
+                {gapMinutes > 60 && <p className="text-[10px] text-red-400 font-bold uppercase ml-1">Max Gap is 60 minutes</p>}
+              </div>
+           </div>
+        </div>
+
+        {/* Sender Card (Only for non-Full CSV) */}
+        {mode !== 'full_csv' && (
+          <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6 shadow-sm">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="font-semibold text-white flex items-center gap-2"><div className="p-1.5 bg-indigo-500/20 rounded text-indigo-400"><Users className="w-4 h-4" /></div> Sender Account</h3>
+              {savedSenders.length > 0 && (
+                 <select className="bg-slate-900 border border-slate-700 text-xs text-blue-300 rounded-lg px-2 py-1 outline-none focus:border-blue-500 cursor-pointer" onChange={(e) => { const selected = savedSenders.find(s => s.email === e.target.value); if (selected) setSender({ email: selected.email, password: selected.password || '' }); }} value=""><option value="" disabled>Load Saved Account...</option>{savedSenders.map(s => <option key={s.email} value={s.email}>{s.email}</option>)}</select>
+              )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-4 items-end">
+               <div className="space-y-1 lg:col-span-5">
+                 <label className="text-[10px] font-bold text-slate-500 uppercase ml-1">Email Address</label>
+                 <input placeholder="Sender Email" className="w-full bg-slate-800/40 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white focus:border-blue-500 outline-none transition-all" value={sender.email} onChange={e => setSender({...sender, email: e.target.value})} />
+               </div>
+               <div className="space-y-1 lg:col-span-5">
+                 <label className="text-[10px] font-bold text-slate-500 uppercase ml-1">App Password</label>
+                 <input type="password" placeholder="SMTP/App Password" className="w-full bg-slate-800/40 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white focus:border-blue-500 outline-none transition-all" value={sender.password} onChange={e => setSender({...sender, password: e.target.value})} />
+               </div>
+               <div className="lg:col-span-2">
+                 <button onClick={() => saveSenderProfile(sender)} className="w-full py-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-400 hover:text-blue-400 rounded-xl flex items-center justify-center gap-2 transition-all"><Save className="w-4 h-4" /> Save</button>
+               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Receiver Card with Mode Selection */}
+        <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6 shadow-sm">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 gap-4">
+            <h3 className="font-semibold text-white flex items-center gap-2"><div className="p-1.5 bg-green-500/20 rounded text-green-400"><Users className="w-4 h-4" /></div> Recipients</h3>
+            <div className="flex bg-slate-900 p-1 rounded-lg border border-slate-800 w-full sm:w-auto">
+              <button onClick={() => setMode('manual')} className={`flex-1 sm:flex-none px-3 py-1.5 text-xs font-medium rounded-md transition-all ${mode === 'manual' ? 'bg-slate-800 text-white shadow' : 'text-slate-400'}`}>Manual</button>
+              <button onClick={() => setMode('receiver_csv')} className={`flex-1 sm:flex-none px-3 py-1.5 text-xs font-medium rounded-md transition-all ${mode === 'receiver_csv' ? 'bg-slate-800 text-white shadow' : 'text-slate-400'}`}>Rec. CSV</button>
+              <button onClick={() => setMode('full_csv')} className={`flex-1 sm:flex-none px-3 py-1.5 text-xs font-medium rounded-md transition-all ${mode === 'full_csv' ? 'bg-slate-800 text-white shadow' : 'text-slate-400'}`}>Full CSV</button>
+            </div>
+          </div>
+
+          {mode === 'manual' ? (
+            <div className="space-y-3">
+              {receivers.map((r, i) => (
+                <div key={i} className="flex flex-col sm:flex-row gap-3 bg-slate-800/40 p-4 rounded-xl border border-slate-700/50 hover:border-slate-600 transition-all items-center">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 flex-1 w-full">
+                     <div className="relative"><span className="absolute -top-2 left-2 text-[9px] bg-slate-800 px-1 text-slate-500 font-bold uppercase">Name</span><input placeholder="Receiver Name" className="w-full bg-slate-900/80 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 outline-none" value={r.receiverName} onChange={e => { const list = [...receivers]; list[i].receiverName = e.target.value; setReceivers(list); }} /></div>
+                     <div className="relative"><span className="absolute -top-2 left-2 text-[9px] bg-slate-800 px-1 text-slate-500 font-bold uppercase">Domain</span><input placeholder="e.g. company.com" className="w-full bg-slate-900/80 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 outline-none" value={r.receiverDomain} onChange={e => { const list = [...receivers]; list[i].receiverDomain = e.target.value; setReceivers(list); }} /></div>
+                     <div className="relative"><span className="absolute -top-2 left-2 text-[9px] bg-slate-800 px-1 text-slate-500 font-bold uppercase">Email</span><input placeholder="Receiver Email" className="w-full bg-slate-900/80 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 outline-none" value={r.receiverMail} onChange={e => { const list = [...receivers]; list[i].receiverMail = e.target.value; setReceivers(list); }} /></div>
+                  </div>
+                  {receivers.length > 1 && <button onClick={() => setReceivers(receivers.filter((_, idx) => idx !== i))} className="p-2 text-slate-500 hover:text-red-400 transition-colors"><Trash2 className="w-4 h-4" /></button>}
+                </div>
+              ))}
+              <button onClick={() => setReceivers([...receivers, {receiverMail: '', receiverDomain: '', receiverName: ''}])} className="w-full py-4 border border-dashed border-slate-700 bg-slate-800/20 text-slate-400 hover:text-blue-400 rounded-xl transition-all text-sm flex items-center justify-center gap-2 group hover:bg-slate-800/40"><Plus className="w-4 h-4 group-hover:scale-110" /> Add Another Receiver</button>
+            </div>
+          ) : (
+            <div className="border-2 border-dashed border-slate-700 rounded-xl p-10 text-center hover:border-blue-500 hover:bg-slate-800/30 transition-all bg-slate-800/20 group cursor-pointer relative">
+              <input type="file" accept=".csv" onChange={(e) => setCsvFile(e.target.files ? e.target.files[0] : null)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
+              <div className="bg-slate-800 p-4 rounded-full inline-flex mb-4 group-hover:scale-110 shadow-lg"><Upload className="w-8 h-8 text-blue-500" /></div>
+              <p className="text-lg font-medium text-white mb-2">{csvFile ? <span className="text-green-400">{csvFile.name}</span> : "Drop CSV file here"}</p>
+              <p className="text-xs text-slate-500 font-mono">
+                {mode === 'receiver_csv' ? 'Required: receiverMail, receiverDomain, receiverName' : 'Required: senderMail, password, receiverMail, receiverDomain, receiverName'}
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Template Card */}
+        <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6 shadow-sm flex flex-col">
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="font-semibold text-white flex items-center gap-2"><div className="p-1.5 bg-amber-500/20 rounded text-amber-400"><FileText className="w-4 h-4" /></div> Email Template</h3>
+            <div className="flex gap-2">
+              <select value={selectedTemplateId} onChange={(e) => loadTemplate(e.target.value)} className="bg-slate-900 border border-slate-700 text-slate-300 text-xs rounded-lg px-2 py-1.5 outline-none focus:border-blue-500 cursor-pointer max-w-[120px] sm:max-w-none"><option value="">Select Saved...</option>{templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
+              <button onClick={() => setIsTemplateModalOpen(true)} className="p-1.5 bg-blue-500/10 text-blue-400 rounded-lg border border-blue-500/20 hover:bg-blue-500/20 transition-colors" title="Save Template"><Save className="w-4 h-4" /></button>
+              {selectedTemplateId && <button onClick={() => deleteTemplate(selectedTemplateId)} className="p-1.5 bg-red-500/10 text-red-400 rounded-lg border border-red-500/20 hover:bg-red-500/20 transition-colors" title="Delete Template"><Trash2 className="w-4 h-4" /></button>}
+            </div>
+          </div>
+          <div className="space-y-4 flex-1 flex flex-col">
+            <input placeholder="Email Subject Line" value={template.subject} onChange={(e) => setTemplate({...template, subject: e.target.value})} className="w-full bg-slate-900/80 border border-slate-700 rounded-xl px-4 py-4 text-white focus:border-blue-500 outline-none font-medium text-lg transition-all" />
+            
+            <div className="bg-slate-800/50 border border-slate-700 rounded-xl overflow-hidden flex flex-col h-[350px]">
+              <div className="flex items-center justify-between p-2 border-b border-slate-700 bg-slate-900/50">
+                 <div className="flex flex-wrap gap-2 items-center">
+                    <button onClick={() => insertTag('<b>', '</b>')} className="p-1.5 hover:bg-slate-700 rounded text-slate-300" title="Bold"><Bold className="w-4 h-4" /></button>
+                    <button onClick={() => insertTag('<i>', '</i>')} className="p-1.5 hover:bg-slate-700 rounded text-slate-300" title="Italic"><Italic className="w-4 h-4" /></button>
+                    <button onClick={() => insertTag('<u>', '</u>')} className="p-1.5 hover:bg-slate-700 rounded text-slate-300" title="Underline"><Underline className="w-4 h-4" /></button>
+                    <div className="w-px h-6 bg-slate-700 mx-1 self-center"></div>
+                    <button onClick={() => insertTag('<h1>', '</h1>')} className="p-1.5 hover:bg-slate-700 rounded text-slate-300 font-bold text-xs" title="Heading 1">H1</button>
+                    <button onClick={() => insertTag('<h2>', '</h2>')} className="p-1.5 hover:bg-slate-700 rounded text-slate-300 font-bold text-xs" title="Heading 2">H2</button>
+                    <div className="w-px h-6 bg-slate-700 mx-1 self-center"></div>
+                    <button onClick={() => insertTag('<a href="">', '</a>')} className="p-1.5 hover:bg-slate-700 rounded text-slate-300" title="Link"><LinkIcon className="w-4 h-4" /></button>
+                    <div className="w-px h-6 bg-slate-700 mx-1 self-center"></div>
+                    <button onClick={() => insertTag('{receiver_name}')} className="px-2 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded text-slate-300 text-[10px] font-mono" title="Receiver Name">{`{name}`}</button>
+                    <button onClick={() => insertTag('{sender_mail}')} className="px-2 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded text-slate-300 text-[10px] font-mono" title="Sender Email">{`{sender}`}</button>
+                    <button onClick={() => insertTag('{domain_name}')} className="px-2 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded text-slate-300 text-[10px] font-mono" title="Domain Name">{`{domain}`}</button>
+                 </div>
+                 <button onClick={() => setIsPreview(!isPreview)} className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${isPreview ? 'bg-blue-600 border-blue-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-300 hover:text-white'}`}>{isPreview ? <><EyeOff className="w-3 h-3" /> Edit</> : <><Eye className="w-3 h-3" /> Preview</>}</button>
+              </div>
+              {isPreview ? (
+                <div className="w-full h-full bg-white text-black p-5 overflow-y-auto prose prose-sm max-w-none">{template.body ? (<div dangerouslySetInnerHTML={{ __html: template.body.replace(/\n/g, '<br/>') }} />) : (<span className="text-gray-400 italic">Preview empty...</span>)}</div>
+              ) : (
+                <textarea ref={textareaRef} placeholder="Compose your email body here...&#10;&#10;Use {receiver_name}, {domain_name}, {sender_mail} as placeholders." value={template.body} onChange={(e) => setTemplate({...template, body: e.target.value})} className="w-full h-full bg-slate-900/80 p-5 text-white focus:outline-none resize-none font-mono text-sm" />
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {isTemplateModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-800 p-6 rounded-2xl w-full max-w-md border border-slate-700 shadow-2xl">
+            <h3 className="text-xl font-bold text-white mb-4">Save Template</h3>
+            <input placeholder="e.g., Monthly Newsletter" value={template.name} onChange={(e) => setTemplate({...template, name: e.target.value})} className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white mb-4" />
+            <div className="flex justify-end gap-3"><button onClick={() => setIsTemplateModalOpen(false)} className="px-5 py-2.5 text-slate-300 font-medium">Cancel</button><button onClick={saveTemplate} className="px-5 py-2.5 bg-blue-600 text-white rounded-xl font-bold">Save</button></div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// 8. Extract Emails Module
 const ExtractEmails = ({ token }: { token: string }) => {
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [domainCol, setDomainCol] = useState('domain');
@@ -1655,7 +1986,7 @@ const ExtractEmails = ({ token }: { token: string }) => {
   );
 };
 
-// 8. Master Scheduler Component
+// 9. Master Scheduler Component
 const MasterScheduler = ({ token }: { token: string }) => {
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -1879,7 +2210,7 @@ const MasterScheduler = ({ token }: { token: string }) => {
   );
 };
 
-// 9. Main App Entry
+// 10. Main App Entry
 const App = () => {
   const [token, setToken] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
