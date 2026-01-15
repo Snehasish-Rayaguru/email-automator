@@ -72,8 +72,17 @@ interface User {
   status: 'pending' | 'approved' | 'rejected' | 'expired';
   allowed_apis: string[];
   access_days: number | null;
+  monthly_email_limit?: number;
   access_expires_at: string | null;
   created_at: string;
+}
+
+interface UserUsage {
+  user_id: string;
+  email: string;
+  monthly_email_limit: number;
+  sent_this_month: number;
+  remaining: number | null;
 }
 
 interface DNSRecord {
@@ -101,10 +110,10 @@ interface DomainListItem {
 }
 
 interface EmailStats {
-  today: { gmail_sent: number; ses_sent: number; total_sent: number };
-  month: { total_sent: number };
-  limits: { gmail_daily_limit: number; ses_daily_limit: number; monthly_limit: number };
-  remaining: { gmail_today: number; ses_today: number; monthly: number };
+  monthly_limit: number;
+  sent_today: number;
+  sent_this_month: number;
+  remaining: number | null;
 }
 
 interface EmailLog {
@@ -355,6 +364,7 @@ const AuthScreen = ({ onLogin }: { onLogin: (token: string, isAdmin: boolean) =>
 // 2. Admin Dashboard
 const AdminDashboard = ({ token, onLogout }: { token: string, onLogout: () => void }) => {
   const [users, setUsers] = useState<User[]>([]);
+  const [usage, setUsage] = useState<UserUsage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [msg, setMsg] = useState<{type: 'success' | 'error', text: string} | null>(null);
@@ -362,6 +372,7 @@ const AdminDashboard = ({ token, onLogout }: { token: string, onLogout: () => vo
   const [formData, setFormData] = useState({
     status: 'approved',
     access_days: 30,
+    monthly_email_limit: 500,
     allowed_apis: ['scheduleEmails', 'extractEmails', 'domainVerification']
   });
 
@@ -373,13 +384,25 @@ const AdminDashboard = ({ token, onLogout }: { token: string, onLogout: () => vo
     } catch (err) { console.error(err); } finally { setIsLoading(false); }
   };
 
-  useEffect(() => { fetchUsers(); }, []);
+  const fetchUsage = async () => {
+    try {
+      const data = await apiCall('/admin/email-usage', { headers: { 'Authorization': `Bearer ${token}` } });
+      setUsage(data.users || []);
+    } catch (err) { console.error(err); }
+  };
+
+  useEffect(() => { 
+    fetchUsers(); 
+    fetchUsage();
+  }, []);
 
   const handleEditClick = (user: User) => {
+    const userUsage = usage.find(u => u.user_id === user._id);
     setEditingUser(user);
     setFormData({
       status: user.status === 'pending' ? 'approved' : user.status,
       access_days: user.access_days || 30,
+      monthly_email_limit: user.monthly_email_limit || userUsage?.monthly_email_limit || 500,
       allowed_apis: user.allowed_apis.length > 0 ? user.allowed_apis : ['scheduleEmails', 'extractEmails','domainVerification']
     });
     setMsg(null);
@@ -400,12 +423,14 @@ const AdminDashboard = ({ token, onLogout }: { token: string, onLogout: () => vo
           email: editingUser.email,
           status: formData.status,
           allowed_apis: formData.allowed_apis,
+          monthly_email_limit: Number(formData.monthly_email_limit),
           access_days: Number(formData.access_days)
         })
       });
 
       setMsg({ type: 'success', text: "User updated successfully!" });
       fetchUsers();
+      fetchUsage();
       setTimeout(() => setEditingUser(null), 1500);
     } catch (err: any) {
       setMsg({ type: 'error', text: err.message });
@@ -441,48 +466,57 @@ const AdminDashboard = ({ token, onLogout }: { token: string, onLogout: () => vo
                 <tr>
                   <th className="px-6 py-4">User</th>
                   <th className="px-6 py-4">Status</th>
-                  <th className="px-6 py-4">APIs</th>
+                  <th className="px-6 py-4">Usage (Sent/Limit)</th>
+                  <th className="px-6 py-4">Remaining</th>
                   <th className="px-6 py-4">Expires At</th>
                   <th className="px-6 py-4 text-right">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
                 {isLoading ? (
-                  <tr><td colSpan={5} className="px-6 py-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto"/></td></tr>
-                ) : users.map(user => (
-                  <tr key={user._id} className="hover:bg-slate-800/50 transition-colors">
-                    <td className="px-6 py-4">
-                      <div className="font-medium text-white">{user.email}</div>
-                      <div className="text-xs">{user.company_name}</div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className={`px-2 py-1 rounded text-xs font-bold uppercase ${
-                        user.status === 'approved' ? 'bg-green-500/20 text-green-400' :
-                        user.status === 'rejected' ? 'bg-red-500/20 text-red-400' :
-                        'bg-amber-500/20 text-amber-400'
-                      }`}>
-                        {user.status}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex gap-1 flex-wrap">
-                        {user.allowed_apis.map(api => (
-                          <span key={api} className="px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded text-xs">
-                            {api === 'scheduleEmails' ? 'Schedule' : 
-                             api === 'extractEmails' ? 'Extract' :
-                             api === 'domainVerification' ? 'Domains' : api}
-                          </span>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 font-mono text-xs">
-                      {user.access_expires_at ? new Date(user.access_expires_at).toLocaleDateString() : '-'}
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <button onClick={() => handleEditClick(user)} className="p-2 bg-blue-600/10 text-blue-400 hover:bg-blue-600 hover:text-white rounded-lg transition-all"><Edit className="w-4 h-4" /></button>
-                    </td>
-                  </tr>
-                ))}
+                  <tr><td colSpan={6} className="px-6 py-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto"/></td></tr>
+                ) : users.map(user => {
+                  const userUsage = usage.find(u => u.user_id === user._id);
+                  return (
+                    <tr key={user._id} className="hover:bg-slate-800/50 transition-colors">
+                      <td className="px-6 py-4">
+                        <div className="font-medium text-white">{user.email}</div>
+                        <div className="text-xs">{user.company_name}</div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`px-2 py-1 rounded text-xs font-bold uppercase ${
+                          user.status === 'approved' ? 'bg-green-500/20 text-green-400' :
+                          user.status === 'rejected' ? 'bg-red-500/20 text-red-400' :
+                          'bg-amber-500/20 text-amber-400'
+                        }`}>
+                          {user.status}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex flex-col">
+                           <div className="text-white font-mono">{userUsage?.sent_this_month || 0} / {userUsage?.monthly_email_limit || user.monthly_email_limit || 0}</div>
+                           <div className="w-24 bg-slate-800 h-1 rounded-full mt-1 overflow-hidden">
+                              <div 
+                                className="bg-blue-500 h-full" 
+                                style={{ width: `${Math.min(((userUsage?.sent_this_month || 0) / (userUsage?.monthly_email_limit || user.monthly_email_limit || 1)) * 100, 100)}%` }}
+                              />
+                           </div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`font-bold ${userUsage?.remaining === 0 ? 'text-red-400' : 'text-slate-300'}`}>
+                          {userUsage?.remaining === null ? 'Unlimited' : userUsage?.remaining}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 font-mono text-xs">
+                        {user.access_expires_at ? new Date(user.access_expires_at).toLocaleDateString() : '-'}
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <button onClick={() => handleEditClick(user)} className="p-2 bg-blue-600/10 text-blue-400 hover:bg-blue-600 hover:text-white rounded-lg transition-all"><Edit className="w-4 h-4" /></button>
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
@@ -503,6 +537,33 @@ const AdminDashboard = ({ token, onLogout }: { token: string, onLogout: () => vo
                 <input disabled value={editingUser.email} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-500 cursor-not-allowed" />
               </div>
 
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-slate-400 mb-2">Access Duration (Days)</label>
+                  <div className="relative">
+                    <Calendar className="absolute left-3 top-2.5 w-4 h-4 text-slate-500" />
+                    <input 
+                      type="number"
+                      value={formData.access_days}
+                      onChange={(e) => setFormData({...formData, access_days: parseInt(e.target.value)})}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-lg pl-10 pr-3 py-2 text-white focus:border-blue-500 outline-none" 
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm text-slate-400 mb-2">Monthly Email Limit</label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-2.5 w-4 h-4 text-slate-500" />
+                    <input 
+                      type="number"
+                      value={formData.monthly_email_limit}
+                      onChange={(e) => setFormData({...formData, monthly_email_limit: parseInt(e.target.value)})}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-lg pl-10 pr-3 py-2 text-white focus:border-blue-500 outline-none" 
+                    />
+                  </div>
+                </div>
+              </div>
+
               <div>
                 <label className="block text-sm text-slate-400 mb-2">Account Status</label>
                 <div className="flex flex-wrap gap-4">
@@ -518,19 +579,6 @@ const AdminDashboard = ({ token, onLogout }: { token: string, onLogout: () => vo
                       <span className="capitalize text-slate-300">{s}</span>
                     </label>
                   ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm text-slate-400 mb-2">Access Duration (Days)</label>
-                <div className="relative">
-                  <Calendar className="absolute left-3 top-2.5 w-4 h-4 text-slate-500" />
-                  <input 
-                    type="number"
-                    value={formData.access_days}
-                    onChange={(e) => setFormData({...formData, access_days: parseInt(e.target.value)})}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg pl-10 pr-3 py-2 text-white focus:border-blue-500 outline-none" 
-                  />
                 </div>
               </div>
 
@@ -706,7 +754,7 @@ const UserDashboard = ({ token, onLogout }: { token: string, onLogout: () => voi
   );
 };
 
-// 4. User Stats & Logs (Updated to include DELETE APIs)
+// 4. User Stats & Logs (Updated to call GET /emails/usage)
 const UserStats = ({ token }: { token: string }) => {
   const [stats, setStats] = useState<EmailStats | null>(null);
   const [logs, setLogs] = useState<EmailLog[]>([]);
@@ -734,7 +782,7 @@ const UserStats = ({ token }: { token: string }) => {
 
   const fetchStats = async () => {
     try {
-      const statsData = await apiCall('/user/email-stats', { headers: { 'Authorization': `Bearer ${token}` } });
+      const statsData = await apiCall('/emails/usage', { headers: { 'Authorization': `Bearer ${token}` } });
       setStats(statsData);
     } catch (err) {
       console.error("Failed to load stats", err);
@@ -827,35 +875,36 @@ const UserStats = ({ token }: { token: string }) => {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-5 shadow-sm">
             <div className="flex items-center gap-3 mb-2"><Activity className="w-5 h-5 text-blue-400" /><h3 className="font-semibold text-slate-300">Today's Usage</h3></div>
-            <div className="space-y-1">
-              <div className="flex justify-between text-sm"><span className="text-slate-500">Gmail Sent</span><span className="text-white font-mono">{stats.today.gmail_sent} <span className="text-slate-600">/ {stats.limits.gmail_daily_limit}</span></span></div>
-              <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden"><div className="bg-blue-500 h-full rounded-full" style={{ width: `${Math.min((stats.today.gmail_sent / stats.limits.gmail_daily_limit) * 100, 100)}%` }}></div></div>
-              
-              <div className="flex justify-between text-sm mt-3"><span className="text-slate-500">SES Sent</span><span className="text-white font-mono">{stats.today.ses_sent} <span className="text-slate-600">/ {stats.limits.ses_daily_limit}</span></span></div>
-              <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden"><div className="bg-purple-500 h-full rounded-full" style={{ width: `${Math.min((stats.today.ses_sent / stats.limits.ses_daily_limit) * 100, 100)}%` }}></div></div>
+            <div className="mt-4">
+              <div className="text-3xl font-bold text-white">{stats.sent_today}</div>
+              <div className="text-xs text-slate-500">Emails successfully sent today</div>
             </div>
           </div>
 
           <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-5 shadow-sm">
-             <div className="flex items-center gap-3 mb-2"><TrendingUp className="w-5 h-5 text-green-400" /><h3 className="font-semibold text-slate-300">Monthly Usage</h3></div>
+             <div className="flex items-center gap-3 mb-2"><TrendingUp className="w-5 h-5 text-green-400" /><h3 className="font-semibold text-slate-300">Monthly Progress</h3></div>
              <div className="mt-4">
-                <div className="text-3xl font-bold text-white">{stats.month.total_sent}</div>
+                <div className="text-3xl font-bold text-white">{stats.sent_this_month}</div>
                 <div className="text-xs text-slate-500">Total emails sent this month</div>
-                <div className="mt-3 flex justify-between text-xs text-slate-400"><span>Limit: {stats.limits.monthly_limit}</span><span>Left: {stats.remaining.monthly}</span></div>
-                <div className="w-full bg-slate-800 h-1.5 rounded-full mt-1 overflow-hidden"><div className="bg-green-500 h-full rounded-full" style={{ width: `${Math.min((stats.month.total_sent / stats.limits.monthly_limit) * 100, 100)}%` }}></div></div>
+                <div className="mt-3 flex justify-between text-xs text-slate-400">
+                  <span>Limit: {stats.monthly_limit === 0 ? 'Unlimited' : stats.monthly_limit}</span>
+                  <span>Left: {stats.remaining === null ? 'Unlimited' : stats.remaining}</span>
+                </div>
+                <div className="w-full bg-slate-800 h-1.5 rounded-full mt-1 overflow-hidden">
+                  <div 
+                    className="bg-green-500 h-full rounded-full transition-all duration-500" 
+                    style={{ width: `${stats.monthly_limit === 0 ? 0 : Math.min((stats.sent_this_month / stats.monthly_limit) * 100, 100)}%` }}
+                  ></div>
+                </div>
              </div>
           </div>
 
            <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-5 shadow-sm">
-             <div className="flex items-center gap-3 mb-2"><BarChart3 className="w-5 h-5 text-amber-400" /><h3 className="font-semibold text-slate-300">Daily Quota Left</h3></div>
-             <div className="grid grid-cols-2 gap-4 mt-4 text-center">
-                <div className="bg-slate-800/50 rounded-xl p-3">
-                   <div className="text-xl font-bold text-blue-400">{stats.remaining.gmail_today}</div>
-                   <div className="text-[10px] uppercase font-bold text-slate-500 mt-1">Gmail</div>
-                </div>
-                <div className="bg-slate-800/50 rounded-xl p-3">
-                   <div className="text-xl font-bold text-purple-400">{stats.remaining.ses_today}</div>
-                   <div className="text-[10px] uppercase font-bold text-slate-500 mt-1">Custom Domain</div>
+             <div className="flex items-center gap-3 mb-2"><BarChart3 className="w-5 h-5 text-amber-400" /><h3 className="font-semibold text-slate-300">Remaining Quota</h3></div>
+             <div className="mt-4 text-center">
+                <div className="bg-slate-800/50 rounded-xl p-4">
+                   <div className="text-2xl font-bold text-amber-400">{stats.remaining === null ? '∞' : stats.remaining}</div>
+                   <div className="text-[10px] uppercase font-bold text-slate-500 mt-1">Available Emails</div>
                 </div>
              </div>
           </div>
